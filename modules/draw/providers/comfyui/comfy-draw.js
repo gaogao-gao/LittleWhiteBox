@@ -3713,21 +3713,34 @@ function stripBreakLiteral(text) {
 
 function positionToRegion(position, index, total) {
     const pos = (position || '').toLowerCase().replace(/^in\s+/, '').trim();
+    const hasLeft = pos.includes('left');
+    const hasRight = pos.includes('right');
+    const hasUpper = pos.includes('upper') || pos.includes('top');
+    const hasLower = pos.includes('lower') || pos.includes('bottom');
+
+    if (hasUpper || hasLower) {
+        const y = hasUpper ? '0 0.5' : '0.5 1';
+        if (hasLeft) return `0 0.5, ${y}`;
+        if (hasRight) return `0.5 1, ${y}`;
+        return `0 1, ${y}`;
+    }
+
     if (total === 2) {
-        if (pos.includes('right')) return '0.5 1, 0 1';
-        if (pos.includes('left')) return '0 0.5, 0 1';
+        if (hasRight) return '0.5 1, 0 1';
+        if (hasLeft) return '0 0.5, 0 1';
         return index === 0 ? '0 0.5, 0 1' : '0.5 1, 0 1';
     }
     if (total === 3) {
-        if (pos.includes('left')) return '0 0.33, 0 1';
+        if (hasLeft) return '0 0.33, 0 1';
         if (pos.includes('center') || pos.includes('middle')) return '0.33 0.67, 0 1';
-        if (pos.includes('right')) return '0.67 1, 0 1';
+        if (hasRight) return '0.67 1, 0 1';
         const thirds = ['0 0.33, 0 1', '0.33 0.67, 0 1', '0.67 1, 0 1'];
         return thirds[index] || thirds[thirds.length - 1];
     }
     const w = +(1 / total).toFixed(2);
     const x = +(index * w).toFixed(2);
-    return `${x} ${+(x + w).toFixed(2)}, 0 1`;
+    const x2 = index === total - 1 ? 1 : +(x + w).toFixed(2);
+    return `${x} ${x2}, 0 1`;
 }
 
 function buildComfyPositive({ prefix, scene, characterPrompts, chars, background, useBreak = false, useCouple = false }) {
