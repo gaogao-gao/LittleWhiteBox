@@ -287,7 +287,7 @@ export async function clearSlotSelection(slotId) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function storePreview(opts) {
-    const { imgId, slotId, messageId, base64 = null, tags, positive, savedUrl = null, status = 'success', errorType = null, errorMessage = null, characterPrompts = null, negativePrompt = null, anchor = '' } = opts;
+    const { imgId, slotId, messageId, base64 = null, tags, positive, savedUrl = null, status = 'success', errorType = null, errorMessage = null, characterPrompts = null, negativePrompt = null, anchor = '', background = '' } = opts;
     const database = await openDB();
     const ctx = getContext();
     
@@ -310,6 +310,7 @@ export async function storePreview(opts) {
                 characterPrompts,
                 negativePrompt,
                 anchor,
+                background,
                 timestamp: Date.now()
             });
             tx.oncomplete = () => { invalidateCache(slotId); resolve(); };
@@ -334,6 +335,7 @@ export async function storeFailedPlaceholder(opts) {
         characterPrompts: opts.characterPrompts || null,
         negativePrompt: opts.negativePrompt || null,
         anchor: opts.anchor || '',
+        background: opts.background || '',
     });
 }
 
@@ -849,7 +851,14 @@ async function deleteCurrentGalleryImage() {
         if (previews.length === 0) {
             closeGallery();
             if (callbacks.onBecameEmpty) {
-                callbacks.onBecameEmpty(slotId, messageId, { tags: current.tags || '', positive: current.positive || '' });
+                callbacks.onBecameEmpty(slotId, messageId, {
+                    tags: current.tags || '',
+                    positive: current.positive || '',
+                    characterPrompts: current.characterPrompts || null,
+                    negativePrompt: current.negativePrompt || '',
+                    anchor: current.anchor || '',
+                    background: current.background || '',
+                });
             }
             showToast('图片已删除，可点击重试重新生成');
         } else {

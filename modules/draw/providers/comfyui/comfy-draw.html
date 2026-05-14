@@ -787,6 +787,10 @@ select.input { cursor: pointer; }
                         <textarea id="comfy-draw-negative-prefix" class="input" rows="3" placeholder="lowres, bad anatomy..."></textarea>
                         <p class="form-hint">API 出图不会读取 ComfyUI 网页上的 tag，请把负向固定 tag 填在这里。</p>
                     </div>
+                    <div class="form-group">
+                        <label class="check-row"><input type="checkbox" id="comfy-use-break" checked> BREAK 分段</label>
+                        <p class="form-hint">多角色时用 BREAK 隔离各角色提示词段，能改善多人场景下的特征融合问题（如发色串色、服装混淆）。若你的工作流 CLIP 编码节点不支持 BREAK 关键词，请关闭此选项。</p>
+                    </div>
                 </div>
 
                 <div class="card">

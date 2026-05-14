@@ -384,7 +384,7 @@ function parseYamlCharacters(rawCharacters) {
         if (!name) return null;
 
         const char = { name };
-        const optionalFields = ['danbooru', 'type', 'appear', 'costume', 'action', 'interact', 'uc', 'center'];
+        const optionalFields = ['danbooru', 'type', 'appear', 'costume', 'action', 'interact', 'uc', 'center', 'position'];
         for (const field of optionalFields) {
             const value = normalizeYamlScalar(rawChar[field]);
             if (value) char[field] = value;
@@ -414,6 +414,7 @@ function parseYamlImagePlan(text) {
             index: Number(image.index) || 0,
             anchor: normalizeYamlScalar(image.anchor),
             scene: normalizeYamlScalar(image.scene),
+            background: normalizeYamlScalar(image.background),
             negative: normalizeYamlScalar(image.negative),
             chars: parseYamlCharacters(image.characters),
             hasCharactersField: Object.prototype.hasOwnProperty.call(image, 'characters'),
@@ -427,6 +428,7 @@ function normalizeImageTasks(images) {
             index: Number(img.index) || 0,
             anchor: String(img.anchor || '').trim(),
             scene: String(img.scene || '').trim(),
+            background: String(img.background || '').trim(),
             negative: String(img.negative || '').trim(),
             chars: [],
             hasCharactersField: img.hasCharactersField === true
@@ -444,6 +446,7 @@ function normalizeImageTasks(images) {
             if (c.interact) char.interact = String(c.interact).trim();
             if (c.uc) char.uc = String(c.uc).trim();
             if (c.center) char.center = String(c.center).trim();
+            if (c.position) char.position = String(c.position).trim();
             task.chars.push(char);
         }
 

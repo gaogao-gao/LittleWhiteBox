@@ -168,6 +168,7 @@ const DEFAULT_COMFY_DRAW_SETTINGS = {
     promptPresets: [],
     selectedPromptPresetId: null,
     _promptTemplateVersion: 0,
+    useBreak: true,
 };
 
 let moduleInitialized = false;
@@ -453,6 +454,7 @@ function normalizeSettings(raw = {}) {
     };
 
     merged.advancedMode = true;
+    merged.useBreak = raw.useBreak !== false;
     merged.customPrompts = { ...DEFAULT_COMFY_DRAW_SETTINGS.customPrompts, ...(raw.customPrompts || {}) };
     if (!Array.isArray(merged.promptPresets)) merged.promptPresets = [];
 
@@ -1523,6 +1525,11 @@ function bindOverlayEvents() {
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
         } catch {}
     });
+    querySettings('#comfy-use-break')?.addEventListener('change', async (event) => {
+        await withSaveTimeout(updateSettingsPersistent((settings) => {
+            settings.useBreak = event.target.checked === true;
+        }, 'BREAK 分段设置已保存', { silent: false }));
+    });
     querySettings('#comfy-draw-save')?.addEventListener('click', async (event) => {
         const ok = await saveAllSettings({ notify: true, triggerButton: event.currentTarget, statusElementId: 'comfy-draw-api-status' });
         if (ok) fillForm(getSettings());
@@ -2150,6 +2157,7 @@ function fillForm(settings) {
     updateSizePresetSelection();
     setValue('comfy-draw-positive-prefix', preset.positivePrefix);
     setValue('comfy-draw-negative-prefix', preset.negativePrefix);
+    setChecked('comfy-use-break', settings.useBreak !== false);
     setValue('comfy-draw-max-images', preset.maxImages || 0);
     setValue('comfy-draw-max-chars', preset.maxCharactersPerImage || 0);
 
@@ -3597,6 +3605,49 @@ function composePrompt(prefix, promptText) {
     return joinTags(prefix || '', promptText || '');
 }
 
+function cleanInteractPrefixes(text) {
+    if (!text) return '';
+    return String(text).replace(/\b(?:source|target|mutual)#/gi, '').trim();
+}
+
+function stripBreakLiteral(text) {
+    if (!text) return '';
+    return String(text).replace(/\bBREAK\b/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+function buildComfyPositive({ prefix, scene, characterPrompts, chars, background, useBreak = false }) {
+    const safeBackground = stripBreakLiteral(background);
+    const cleanedPrompts = (Array.isArray(characterPrompts) ? characterPrompts : []).map(cp => ({
+        ...cp,
+        prompt: cp?.prompt ? cleanInteractPrefixes(cp.prompt) : '',
+        position: stripBreakLiteral(cp?.position || ''),
+    }));
+
+    if (!cleanedPrompts.length || !cleanedPrompts.some(cp => cp.prompt)) {
+        const base = joinTags(prefix, scene);
+        if (!safeBackground) return base;
+        return useBreak ? `${base} BREAK ${safeBackground}` : joinTags(base, safeBackground);
+    }
+
+    if (!useBreak) {
+        const allPositive = cleanedPrompts.map(cp => cp.prompt).filter(Boolean).join(', ');
+        return joinTags(prefix, scene, allPositive, safeBackground);
+    }
+
+    const segments = [];
+    const mainPos = cleanedPrompts[0].position || chars?.[0]?.position || '';
+    segments.push(joinTags(prefix, scene, cleanedPrompts[0].prompt, mainPos));
+
+    for (let i = 1; i < cleanedPrompts.length; i++) {
+        const pos = cleanedPrompts[i].position || chars?.[i]?.position || '';
+        const prompt = cleanedPrompts[i].prompt || '';
+        if (prompt) segments.push(joinTags(prompt, pos));
+    }
+
+    if (safeBackground) segments.push(safeBackground);
+    return segments.filter(Boolean).join(' BREAK ');
+}
+
 function escapeHtml(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -3998,23 +4049,37 @@ function buildPromptForTask(task, sharedDrawSettings, comfySettings, promptOverr
     const characterPrompts = Array.isArray(task?.characterPrompts)
         ? task.characterPrompts.filter(Boolean)
         : assembleCharacterPrompts(task.chars || [], sharedDrawSettings.characterTags || [], {
-            preserveDanbooruCanonical: true,
+            preserveDanbooruCanonical: false,
         });
+
+    for (let i = 0; i < characterPrompts.length; i++) {
+        const pos = task.chars?.[i]?.position || '';
+        if (pos) characterPrompts[i] = { ...characterPrompts[i], position: pos };
+    }
 
     if (promptOverride.trim()) {
         return {
             positive: composePrompt(comfySettings.positivePrefix, promptOverride),
             negative: composePrompt(comfySettings.negativePrefix, negativePromptOverride),
             characterPrompts,
+            background: task.background || '',
         };
     }
 
-    const charPositive = characterPrompts.map(item => item.prompt).filter(Boolean).join(', ');
+    const useBreak = comfySettings.useBreak === true;
     const charNegative = characterPrompts.map(item => item.uc).filter(Boolean).join(', ');
     return {
-        positive: joinTags(comfySettings.positivePrefix, task.scene, charPositive),
+        positive: buildComfyPositive({
+            prefix: comfySettings.positivePrefix,
+            scene: task.scene,
+            characterPrompts,
+            chars: task.chars,
+            background: task.background,
+            useBreak,
+        }),
         negative: joinTags(comfySettings.negativePrefix, negativePromptOverride, charNegative),
         characterPrompts,
+        background: task.background || '',
     };
 }
 
@@ -4090,17 +4155,21 @@ async function getPreviewByImageId(container) {
     }
 }
 
-function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings())) {
-    const charPositive = (Array.isArray(characterPrompts) ? characterPrompts : [])
-        .map(item => item?.prompt)
-        .filter(Boolean)
-        .join(', ');
+function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings()), background = '') {
+    const settings = getSettings();
+    const useBreak = settings.useBreak === true;
     const charNegative = (Array.isArray(characterPrompts) ? characterPrompts : [])
         .map(item => item?.uc)
         .filter(Boolean)
         .join(', ');
     return {
-        positive: joinTags(params.positivePrefix || '', sceneTags, charPositive),
+        positive: buildComfyPositive({
+            prefix: params.positivePrefix || '',
+            scene: sceneTags,
+            characterPrompts: Array.isArray(characterPrompts) ? characterPrompts : [],
+            background,
+            useBreak,
+        }),
         negative: joinTags(params.negativePrefix || '', charNegative),
     };
 }
@@ -4194,6 +4263,10 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
                 slotId: sid, messageId: msgId,
                 tags: lastImageInfo.tags || '', positive: lastImageInfo.positive || '',
                 errorType: 'deleted', errorMessage: '图片已删除，点击重试可重新生成',
+                characterPrompts: lastImageInfo.characterPrompts || null,
+                negativePrompt: lastImageInfo.negativePrompt || '',
+                anchor: lastImageInfo.anchor || '',
+                background: lastImageInfo.background || '',
             }).catch(() => {});
             await clearDrawSavedEntry(msgId, sid).catch(() => {});
             if (getSettingsElement('comfy-gallery-container')) {
@@ -4457,7 +4530,7 @@ async function saveEditedTags(container) {
         });
     }
 
-    const promptData = buildEditedPromptData(newSceneTags, newCharPrompts || originalPreview?.characterPrompts || []);
+    const promptData = buildEditedPromptData(newSceneTags, newCharPrompts || originalPreview?.characterPrompts || [], undefined, originalPreview?.background || '');
     container.dataset.tags = newSceneTags;
     container.dataset.positive = promptData.positive || newSceneTags;
 
@@ -4492,7 +4565,7 @@ async function refreshSingleImage(container) {
     const messageId = Number(container.dataset.mesid);
     const preview = await getPreviewByImageId(container);
     const sceneTags = container.dataset.tags || preview?.tags || '';
-    const promptData = buildEditedPromptData(sceneTags, preview?.characterPrompts || []);
+    const promptData = buildEditedPromptData(sceneTags, preview?.characterPrompts || [], undefined, preview?.background || '');
     const prompt = promptData.positive || container.dataset.positive || sceneTags;
     if (!slotId || !prompt) return;
 
@@ -4512,6 +4585,7 @@ async function refreshSingleImage(container) {
             tags: container.dataset.tags || prompt, positive: prompt,
             characterPrompts: preview?.characterPrompts || [],
             negativePrompt: promptData.negative || preview?.negativePrompt || params.negativePrefix || '', anchor: '',
+            background: preview?.background || '',
         });
         await setSlotSelection(slotId, imgId);
         void clearDrawSavedEntry(messageId, slotId).catch(() => {});
@@ -4548,8 +4622,14 @@ async function retryFailedImage(container) {
         const params = getEffectiveParams(settings);
         const failedPreviews = await getPreviewsBySlot(slotId);
         latestFailed = failedPreviews.find(p => p.status === 'failed') || null;
-        const charPositive = (latestFailed?.characterPrompts || []).map(item => item?.prompt).filter(Boolean).join(', ');
-        const positive = joinTags(params.positivePrefix || '', tags, charPositive);
+        const useBreak = settings.useBreak === true;
+        const positive = buildComfyPositive({
+            prefix: params.positivePrefix || '',
+            scene: tags,
+            characterPrompts: latestFailed?.characterPrompts || [],
+            background: latestFailed?.background || '',
+            useBreak,
+        });
         const negative = latestFailed?.negativePrompt || params.negativePrefix || '';
 
         const base64 = await generateComfyImageQueued({ prompt: positive, negativePrompt: negative, params });
@@ -4558,6 +4638,7 @@ async function retryFailedImage(container) {
             imgId, slotId, messageId, base64, tags, positive,
             characterPrompts: latestFailed?.characterPrompts || [],
             negativePrompt: negative, anchor: latestFailed?.anchor || '',
+            background: latestFailed?.background || '',
         });
         await deleteFailedRecordsForSlot(slotId);
         await setSlotSelection(slotId, imgId);
@@ -4577,6 +4658,7 @@ async function retryFailedImage(container) {
             characterPrompts: latestFailed?.characterPrompts || [],
             negativePrompt: latestFailed?.negativePrompt || '',
             anchor: latestFailed?.anchor || '',
+            background: latestFailed?.background || '',
         }).catch(() => {});
 
         // eslint-disable-next-line no-unsanitized/property
@@ -4740,6 +4822,7 @@ export async function generateAndInsertImages({
             const promptData = buildPromptForTask(task, sharedDrawSettings, {
                 positivePrefix: params.positivePrefix,
                 negativePrefix: params.negativePrefix,
+                useBreak: comfySettings.useBreak === true,
             }, promptOverride, negativePromptOverride);
             let position = findAnchorPosition(message.mes, task.anchor);
 
@@ -4770,6 +4853,7 @@ export async function generateAndInsertImages({
                     tags: task.scene || promptOverride, positive: promptData.positive,
                     characterPrompts: promptData.characterPrompts,
                     negativePrompt: promptData.negative, anchor: task.anchor || '',
+                    background: promptData.background || '',
                 });
                 await setSlotSelection(slotId, imgId);
                 successCount++;
@@ -4788,6 +4872,7 @@ export async function generateAndInsertImages({
                     errorType: errorType.code, errorMessage: errorType.desc,
                     characterPrompts: promptData.characterPrompts,
                     negativePrompt: promptData.negative, anchor: task.anchor || '',
+                    background: promptData.background || '',
                 });
                 results.push({ slotId, success: false, error: errorType });
                 incrementalHtml = buildFailedPlaceholderHtml({
