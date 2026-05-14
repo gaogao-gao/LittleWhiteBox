@@ -3033,8 +3033,9 @@ function buildPromptForTask(task, sharedDrawSettings, sdSettings, promptOverride
 
     const charPositive = characterPrompts.map(item => item.prompt).filter(Boolean).join(', ');
     const charNegative = characterPrompts.map(item => item.uc).filter(Boolean).join(', ');
+    const interactTags = characterPrompts.map(item => item.interact).filter(Boolean).join(', ');
     return {
-        positive: joinTags(sdSettings.positivePrefix, task.scene, charPositive),
+        positive: joinTags(sdSettings.positivePrefix, task.scene, interactTags, charPositive),
         negative: joinTags(sdSettings.negativePrefix, negativePromptOverride, charNegative),
         characterPrompts,
     };
@@ -3113,16 +3114,12 @@ async function getPreviewByImageId(container) {
 }
 
 function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings())) {
-    const charPositive = (Array.isArray(characterPrompts) ? characterPrompts : [])
-        .map(item => item?.prompt)
-        .filter(Boolean)
-        .join(', ');
-    const charNegative = (Array.isArray(characterPrompts) ? characterPrompts : [])
-        .map(item => item?.uc)
-        .filter(Boolean)
-        .join(', ');
+    const cpArr = Array.isArray(characterPrompts) ? characterPrompts : [];
+    const charPositive = cpArr.map(item => item?.prompt).filter(Boolean).join(', ');
+    const charNegative = cpArr.map(item => item?.uc).filter(Boolean).join(', ');
+    const interactTags = cpArr.map(item => item?.interact).filter(Boolean).join(', ');
     return {
-        positive: joinTags(params.positivePrefix || '', sceneTags, charPositive),
+        positive: joinTags(params.positivePrefix || '', sceneTags, interactTags, charPositive),
         negative: joinTags(params.negativePrefix || '', charNegative),
     };
 }

@@ -169,8 +169,7 @@ const DEFAULT_COMFY_DRAW_SETTINGS = {
     promptPresets: [],
     selectedPromptPresetId: null,
     _promptTemplateVersion: 0,
-    useBreak: true,
-    useCouple: false,
+    segmentMode: 'break',
 };
 
 let moduleInitialized = false;
@@ -457,8 +456,10 @@ function normalizeSettings(raw = {}) {
     };
 
     merged.advancedMode = true;
-    merged.useBreak = raw.useBreak !== false;
-    merged.useCouple = raw.useCouple === true;
+    const validModes = ['none', 'break', 'couple'];
+    merged.segmentMode = validModes.includes(raw.segmentMode) ? raw.segmentMode
+        : raw.useBreak === false ? 'none'
+        : raw.useCouple === true ? 'couple' : 'break';
     merged.customPrompts = { ...DEFAULT_COMFY_DRAW_SETTINGS.customPrompts, ...(raw.customPrompts || {}) };
     if (!Array.isArray(merged.promptPresets)) merged.promptPresets = [];
 
@@ -1587,15 +1588,10 @@ function bindOverlayEvents() {
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
         } catch {}
     });
-    querySettings('#comfy-use-break')?.addEventListener('change', async (event) => {
+    querySettings('#comfy-segment-mode')?.addEventListener('change', async (event) => {
         await withSaveTimeout(updateSettingsPersistent((settings) => {
-            settings.useBreak = event.target.checked === true;
-        }, 'BREAK 分段设置已保存', { silent: false }));
-    });
-    querySettings('#comfy-use-couple')?.addEventListener('change', async (event) => {
-        await withSaveTimeout(updateSettingsPersistent((settings) => {
-            settings.useCouple = event.target.checked === true;
-        }, 'COUPLE 区域控制设置已保存', { silent: false }));
+            settings.segmentMode = event.target.value || 'break';
+        }, '分段模式已保存', { silent: false }));
     });
     querySettings('#comfy-draw-save')?.addEventListener('click', async (event) => {
         const ok = await saveAllSettings({ notify: true, triggerButton: event.currentTarget, statusElementId: 'comfy-draw-api-status' });
@@ -2229,8 +2225,7 @@ function fillForm(settings) {
     updateSizePresetSelection();
     setValue('comfy-draw-positive-prefix', preset.positivePrefix);
     setValue('comfy-draw-negative-prefix', preset.negativePrefix);
-    setChecked('comfy-use-break', settings.useBreak !== false);
-    setChecked('comfy-use-couple', settings.useCouple === true);
+    setValue('comfy-segment-mode', settings.segmentMode || 'break');
     setValue('comfy-draw-max-images', preset.maxImages || 0);
     setValue('comfy-draw-max-chars', preset.maxCharactersPerImage || 0);
 
@@ -3712,7 +3707,11 @@ function stripBreakLiteral(text) {
 }
 
 function positionToRegion(position, index, total) {
-    const pos = (position || '').toLowerCase().replace(/^in\s+/, '').trim();
+    const raw = (position || '').trim();
+    const coordMatch = raw.match(/^(?:COUPLE\s*\(?\s*)?([\d.]+\s+[\d.]+\s*,\s*[\d.]+\s+[\d.]+)\s*\)?$/i);
+    if (coordMatch) return coordMatch[1].replace(/\s+/g, ' ').trim();
+
+    const pos = raw.toLowerCase().replace(/^in\s+/, '');
     const hasLeft = pos.includes('left');
     const hasRight = pos.includes('right');
     const hasUpper = pos.includes('upper') || pos.includes('top');
@@ -3743,16 +3742,22 @@ function positionToRegion(position, index, total) {
     return `${x} ${x2}, 0 1`;
 }
 
-function buildComfyPositive({ prefix, scene, characterPrompts, chars, background, useBreak = false, useCouple = false }) {
+function buildComfyPositive({ prefix, scene, characterPrompts, chars, background, segmentMode = 'none' }) {
+    const useBreak = segmentMode === 'break';
+    const useCouple = segmentMode === 'couple';
     const safeBackground = stripBreakLiteral(background);
     const cleanedPrompts = (Array.isArray(characterPrompts) ? characterPrompts : []).map(cp => ({
         ...cp,
         prompt: cp?.prompt ? cleanInteractPrefixes(cp.prompt) : '',
+        interact: cp?.interact ? cleanInteractPrefixes(stripBreakLiteral(cp.interact)) : '',
         position: stripBreakLiteral(cp?.position || ''),
     }));
 
+    const interactTags = cleanedPrompts.map(cp => cp.interact).filter(Boolean).join(', ');
+    const sceneWithInteract = joinTags(scene, interactTags);
+
     if (!cleanedPrompts.length || !cleanedPrompts.some(cp => cp.prompt)) {
-        const base = joinTags(prefix, scene);
+        const base = joinTags(prefix, sceneWithInteract);
         if (!safeBackground) return base;
         return useBreak ? `${base} BREAK ${safeBackground}` : joinTags(base, safeBackground);
     }
@@ -3762,7 +3767,7 @@ function buildComfyPositive({ prefix, scene, characterPrompts, chars, background
         .filter(cp => cp.prompt);
 
     if (useCouple && activePrompts.length >= 2) {
-        const global = joinTags(prefix, scene, safeBackground);
+        const global = joinTags(prefix, sceneWithInteract, safeBackground);
         const parts = [`${global} FILL()`];
         for (let i = 0; i < activePrompts.length; i++) {
             const cp = activePrompts[i];
@@ -3775,12 +3780,12 @@ function buildComfyPositive({ prefix, scene, characterPrompts, chars, background
 
     if (!useBreak) {
         const allPositive = cleanedPrompts.map(cp => cp.prompt).filter(Boolean).join(', ');
-        return joinTags(prefix, scene, allPositive, safeBackground);
+        return joinTags(prefix, sceneWithInteract, allPositive, safeBackground);
     }
 
     const segments = [];
     const mainPos = cleanedPrompts[0].position || chars?.[0]?.position || '';
-    segments.push(joinTags(prefix, scene, cleanedPrompts[0].prompt, mainPos));
+    segments.push(joinTags(prefix, sceneWithInteract, cleanedPrompts[0].prompt, mainPos));
 
     for (let i = 1; i < cleanedPrompts.length; i++) {
         const pos = cleanedPrompts[i].position || chars?.[i]?.position || '';
@@ -4210,8 +4215,6 @@ function buildPromptForTask(task, sharedDrawSettings, comfySettings, promptOverr
         };
     }
 
-    const useBreak = comfySettings.useBreak === true;
-    const useCouple = comfySettings.useCouple === true;
     const charNegative = characterPrompts.map(item => item.uc).filter(Boolean).join(', ');
     return {
         positive: buildComfyPositive({
@@ -4220,8 +4223,7 @@ function buildPromptForTask(task, sharedDrawSettings, comfySettings, promptOverr
             characterPrompts,
             chars: task.chars,
             background: task.background,
-            useBreak,
-            useCouple,
+            segmentMode: comfySettings.segmentMode || 'none',
         }),
         negative: joinTags(comfySettings.negativePrefix, negativePromptOverride, charNegative),
         characterPrompts,
@@ -4303,8 +4305,6 @@ async function getPreviewByImageId(container) {
 
 function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings()), background = '') {
     const settings = getSettings();
-    const useBreak = settings.useBreak === true;
-    const useCouple = settings.useCouple === true;
     const charNegative = (Array.isArray(characterPrompts) ? characterPrompts : [])
         .map(item => item?.uc)
         .filter(Boolean)
@@ -4315,8 +4315,7 @@ function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEff
             scene: sceneTags,
             characterPrompts: Array.isArray(characterPrompts) ? characterPrompts : [],
             background,
-            useBreak,
-            useCouple,
+            segmentMode: settings.segmentMode || 'none',
         }),
         negative: joinTags(params.negativePrefix || '', charNegative),
     };
@@ -4770,15 +4769,12 @@ async function retryFailedImage(container) {
         const params = getEffectiveParams(settings);
         const failedPreviews = await getPreviewsBySlot(slotId);
         latestFailed = failedPreviews.find(p => p.status === 'failed') || null;
-        const useBreak = settings.useBreak === true;
-        const useCouple = settings.useCouple === true;
         const positive = buildComfyPositive({
             prefix: params.positivePrefix || '',
             scene: tags,
             characterPrompts: latestFailed?.characterPrompts || [],
             background: latestFailed?.background || '',
-            useBreak,
-            useCouple,
+            segmentMode: settings.segmentMode || 'none',
         });
         const negative = latestFailed?.negativePrompt || params.negativePrefix || '';
 
@@ -4972,8 +4968,7 @@ export async function generateAndInsertImages({
             const promptData = buildPromptForTask(task, sharedDrawSettings, {
                 positivePrefix: params.positivePrefix,
                 negativePrefix: params.negativePrefix,
-                useBreak: comfySettings.useBreak === true,
-                useCouple: comfySettings.useCouple === true,
+                segmentMode: comfySettings.segmentMode || 'none',
             }, promptOverride, negativePromptOverride);
             let position = findAnchorPosition(message.mes, task.anchor);
 

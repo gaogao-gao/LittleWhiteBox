@@ -206,7 +206,8 @@ export function assembleCharacterPrompts(sceneChars, knownCharacters, options = 
         if (known) {
             return {
                 name: known.name || char.name,
-                prompt: joinTags(buildKnownCharacterBasePrompt(known, options), char.costume, char.action, char.interact),
+                prompt: joinTags(buildKnownCharacterBasePrompt(known, options), char.costume, char.action),
+                interact: char.interact || '',
                 uc: joinTags(known.negativeTags, char.uc),
                 center: gridToCoord(char.center) || { x: 0.5, y: 0.5 },
             };
@@ -215,7 +216,8 @@ export function assembleCharacterPrompts(sceneChars, knownCharacters, options = 
         const danbooruTag = char.danbooru ? formatDanbooruTag(char.danbooru, options) : '';
         return {
             name: char.name,
-            prompt: joinTags(danbooruTag, char.type, char.appear, char.costume, char.action, char.interact),
+            prompt: joinTags(danbooruTag, char.type, char.appear, char.costume, char.action),
+            interact: char.interact || '',
             uc: char.uc || '',
             center: gridToCoord(char.center) || { x: 0.5, y: 0.5 },
         };
