@@ -520,17 +520,28 @@ select.input { cursor: pointer; }
                         <select id="comfy-connection-mode" class="input">
                             <option value="proxy">酒馆后端代理</option>
                             <option value="direct">浏览器直连</option>
+                            <option value="runpod">RunPod Serverless</option>
                         </select>
                         <p id="comfy-connection-hint" class="form-hint">酒馆代理会通过 SillyTavern 转发请求；这里不填写 ComfyUI 认证信息。</p>
                         <p id="comfy-connection-mode-note" class="form-hint">如果代理偶发拿不到图，可以先检查 ComfyUI 输出目录，或换浏览器直连对照。</p>
                     </div>
-                    <div class="form-group">
+                    <div id="comfy-host-group" class="form-group">
                         <label class="form-label">ComfyUI 地址</label>
                         <div class="input-row">
                             <input id="comfy-draw-host" class="input" type="text" placeholder="http://127.0.0.1:8188">
                             <button id="comfy-draw-test" class="btn"><i class="fa-solid fa-plug"></i> 测试连接</button>
                         </div>
                         <p id="comfy-host-hint" class="form-hint">填写酒馆服务器能访问到的 ComfyUI 地址。</p>
+                    </div>
+                    <div id="comfy-runpod-row" class="hidden">
+                        <div class="form-group">
+                            <label class="form-label">RunPod Serverless 端点</label>
+                            <div class="input-row">
+                                <input id="comfy-draw-runpod-endpoint" class="input" type="text" placeholder="https://api.runpod.ai/v2/{endpoint-id}">
+                                <button id="comfy-draw-test-runpod" class="btn" type="button"><i class="fa-solid fa-plug"></i> 测试连接</button>
+                            </div>
+                            <p class="form-hint">API Key 需在酒馆「API 连接」→「图片生成」→ ComfyUI RunPod 中配置。</p>
+                        </div>
                     </div>
                     <div class="form-row">
                         <div id="comfy-auth-row" class="form-group hidden">
@@ -790,6 +801,10 @@ select.input { cursor: pointer; }
                     <div class="form-group">
                         <label class="check-row"><input type="checkbox" id="comfy-use-break" checked> BREAK 分段</label>
                         <p class="form-hint">多角色时用 BREAK 隔离各角色提示词段，能改善多人场景下的特征融合问题（如发色串色、服装混淆）。若你的工作流 CLIP 编码节点不支持 BREAK 关键词，请关闭此选项。</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="check-row"><input type="checkbox" id="comfy-use-couple"> COUPLE 区域控制</label>
+                        <p class="form-hint">多角色时用 Attention Couple 语法将每个角色限定到画面的指定区域，比 BREAK 更强的空间隔离。需安装 <a href="https://github.com/asagi4/comfyui-prompt-control" target="_blank">comfyui-prompt-control</a> 节点，并在工作流中使用其 PCTextEncode 编码器。启用后 BREAK 分段自动失效。</p>
                     </div>
                 </div>
 

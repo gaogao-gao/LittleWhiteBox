@@ -126,6 +126,7 @@ const BUILTIN_WORKFLOW_TEMPLATE = {
 const DEFAULT_COMFY_DRAW_SETTINGS = {
     host: '',
     connectionMode: 'proxy',
+    runpodEndpoint: '',
     auth: '',
     timeout: 120000,
     mode: 'manual',
@@ -169,6 +170,7 @@ const DEFAULT_COMFY_DRAW_SETTINGS = {
     selectedPromptPresetId: null,
     _promptTemplateVersion: 0,
     useBreak: true,
+    useCouple: false,
 };
 
 let moduleInitialized = false;
@@ -422,7 +424,8 @@ function normalizeSettings(raw = {}) {
         overrideSize: String(raw.overrideSize || 'default'),
         showFloorButton: raw.showFloorButton !== false,
         showFloatingButton: raw.showFloatingButton !== false,
-        connectionMode: raw.connectionMode === 'direct' ? 'direct' : 'proxy',
+        connectionMode: ['direct', 'runpod'].includes(raw.connectionMode) ? raw.connectionMode : 'proxy',
+        runpodEndpoint: String(raw.runpodEndpoint ?? ''),
         auth: String(raw.auth ?? ''),
         timeout: normalizeNumber(raw.timeout, DEFAULT_COMFY_DRAW_SETTINGS.timeout, 10000, 600000),
         selectedPresetId,
@@ -455,6 +458,7 @@ function normalizeSettings(raw = {}) {
 
     merged.advancedMode = true;
     merged.useBreak = raw.useBreak !== false;
+    merged.useCouple = raw.useCouple === true;
     merged.customPrompts = { ...DEFAULT_COMFY_DRAW_SETTINGS.customPrompts, ...(raw.customPrompts || {}) };
     if (!Array.isArray(merged.promptPresets)) merged.promptPresets = [];
 
@@ -731,6 +735,10 @@ function isDirectConnection(settings = getSettings()) {
     return settings.connectionMode === 'direct';
 }
 
+function isRunPodConnection(settings = getSettings()) {
+    return settings.connectionMode === 'runpod';
+}
+
 function createComfyUrl(path, query = {}, settings = getSettings()) {
     const base = String(settings.host || '').trim();
     if (!base) throw new Error('请先填写 ComfyUI 地址');
@@ -752,6 +760,9 @@ async function readBlobAsBase64(blob) {
 
 async function requestComfyTransport(path, body = {}, { signal, timeoutMs } = {}) {
     const settings = getSettings();
+    if (isRunPodConnection(settings)) {
+        return requestRunPodTransport(path, body, settings, { signal, timeoutMs });
+    }
     if (!settings.host) throw new Error('请先填写 ComfyUI 地址');
     if (isDirectConnection(settings) && path === 'ping') {
         await testComfyDirectConnection({ signal, timeoutMs });
@@ -790,6 +801,39 @@ async function requestComfyTransport(path, body = {}, { signal, timeoutMs } = {}
             throw new Error(buildComfyProxyGenerateError(error?.message || 'ComfyUI 生成失败', error?.status));
         }
         if (error?.name === 'AbortError') throw new Error(signal?.aborted ? '已取消' : '生成超时');
+        throw error;
+    } finally {
+        proxySignal.cleanup();
+    }
+}
+
+async function requestRunPodTransport(path, body, settings, { signal, timeoutMs } = {}) {
+    const endpoint = String(settings.runpodEndpoint || '').trim();
+    if (!endpoint) throw new Error('请先填写 RunPod Serverless 端点地址');
+    if (path === 'models' || path === 'samplers' || path === 'schedulers') {
+        return { ok: true, json: async () => ({}) };
+    }
+    const proxySignal = createComfyRequestSignal(signal, timeoutMs ?? settings.timeout ?? 120000);
+    try {
+        const response = await fetch(`/api/sd/comfyrunpod/${path}`, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ url: endpoint, ...body }),
+            signal: proxySignal.signal,
+        });
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            if (response.status === 400) {
+                throw new Error('请先在酒馆「API 连接」设置中配置 RunPod API Key');
+            }
+            if (path === 'generate') {
+                throw new Error(text || `RunPod 生成失败 (HTTP ${response.status})`);
+            }
+            throw new Error(text || `RunPod HTTP ${response.status}`);
+        }
+        return response;
+    } catch (error) {
+        if (error?.name === 'AbortError') throw new Error(signal?.aborted ? '已取消' : 'RunPod 生成超时');
         throw error;
     } finally {
         proxySignal.cleanup();
@@ -949,6 +993,7 @@ async function fetchComfyDirectImageFromWorkflow(workflow, { signal, timeoutMs, 
 }
 
 async function fetchComfyModels({ signal, timeoutMs } = {}) {
+    if (isRunPodConnection()) return [];
     if (isDirectConnection()) {
         return await fetchComfyDirectModels({ signal, timeoutMs });
     }
@@ -966,6 +1011,7 @@ async function fetchComfyModels({ signal, timeoutMs } = {}) {
 }
 
 async function fetchComfySamplers({ signal, timeoutMs } = {}) {
+    if (isRunPodConnection()) return { samplers: [], schedulers: [] };
     if (isDirectConnection()) {
         return await fetchComfyDirectSamplers({ signal, timeoutMs });
     }
@@ -1249,6 +1295,11 @@ export async function generateComfyImage({ prompt, negativePrompt = '', params =
             saveImage: settings.customWorkflow.nodeSaveImage || '',
         };
         injected = injectPromptIntoWorkflow(workflow, positive, negative, width, height, nodeMap);
+    } else if (isRunPodConnection(settings)) {
+        const hint = settings.workflowMode === 'custom'
+            ? '请先在「工作流配置」中导入工作流 JSON'
+            : '请先切换到自定义工作流模式并导入 ComfyUI API 格式的工作流 JSON';
+        throw new Error(`RunPod Serverless 模式必须使用自定义工作流 — ${hint}`);
     } else {
         // 简单模式：使用内置模板 + 用户选择的模型和参数
         const model = effective.model;
@@ -1541,6 +1592,11 @@ function bindOverlayEvents() {
             settings.useBreak = event.target.checked === true;
         }, 'BREAK 分段设置已保存', { silent: false }));
     });
+    querySettings('#comfy-use-couple')?.addEventListener('change', async (event) => {
+        await withSaveTimeout(updateSettingsPersistent((settings) => {
+            settings.useCouple = event.target.checked === true;
+        }, 'COUPLE 区域控制设置已保存', { silent: false }));
+    });
     querySettings('#comfy-draw-save')?.addEventListener('click', async (event) => {
         const ok = await saveAllSettings({ notify: true, triggerButton: event.currentTarget, statusElementId: 'comfy-draw-api-status' });
         if (ok) fillForm(getSettings());
@@ -1549,6 +1605,10 @@ function bindOverlayEvents() {
         updateConnectionModeUI(getValue('comfy-connection-mode'));
     });
     querySettings('#comfy-draw-test')?.addEventListener('click', async () => {
+        await saveAllSettings({ notify: false });
+        await testConnection();
+    });
+    querySettings('#comfy-draw-test-runpod')?.addEventListener('click', async () => {
         await saveAllSettings({ notify: false });
         await testConnection();
     });
@@ -2160,6 +2220,7 @@ function fillForm(settings) {
     });
     setValue('comfy-connection-mode', settings.connectionMode || 'proxy');
     setValue('comfy-draw-auth', settings.auth || '');
+    setValue('comfy-draw-runpod-endpoint', settings.runpodEndpoint || '');
     updateConnectionModeUI(settings.connectionMode || 'proxy');
     setValue('comfy-draw-host', settings.host);
     setValue('comfy-draw-timeout', settings.timeout);
@@ -2169,6 +2230,7 @@ function fillForm(settings) {
     setValue('comfy-draw-positive-prefix', preset.positivePrefix);
     setValue('comfy-draw-negative-prefix', preset.negativePrefix);
     setChecked('comfy-use-break', settings.useBreak !== false);
+    setChecked('comfy-use-couple', settings.useCouple === true);
     setValue('comfy-draw-max-images', preset.maxImages || 0);
     setValue('comfy-draw-max-chars', preset.maxCharactersPerImage || 0);
 
@@ -2226,7 +2288,8 @@ function readForm() {
     return {
         ...current,
         host: getValue('comfy-draw-host').trim(),
-        connectionMode: getValue('comfy-connection-mode') === 'direct' ? 'direct' : 'proxy',
+        connectionMode: ['direct', 'runpod'].includes(getValue('comfy-connection-mode')) ? getValue('comfy-connection-mode') : 'proxy',
+        runpodEndpoint: getValue('comfy-draw-runpod-endpoint')?.trim() || '',
         auth: getValue('comfy-draw-auth').trim(),
         timeout: normalizeNumber(getValue('comfy-draw-timeout'), current.timeout, 10000, 600000),
         builtinWorkflowId: getValue('comfy-builtin-workflow') || current.builtinWorkflowId || DEFAULT_COMFY_DRAW_SETTINGS.builtinWorkflowId,
@@ -2352,25 +2415,36 @@ function readPromptPresetFromForm(basePreset = getActivePromptPreset(getSettings
 
 function updateConnectionModeUI(mode = getSettings().connectionMode) {
     const isDirect = mode === 'direct';
+    const isRunPod = mode === 'runpod';
     const authRow = getSettingsElement('comfy-auth-row');
     const connectionHint = getSettingsElement('comfy-connection-hint');
     const connectionModeNote = getSettingsElement('comfy-connection-mode-note');
     const hostHint = getSettingsElement('comfy-host-hint');
     const status = getSettingsElement('comfy-draw-api-status');
     const workflowStatus = getSettingsElement('comfy-draw-workflow-status');
-    const statusText = isDirect
-        ? '当前使用浏览器直连 ComfyUI。'
-        : '当前使用酒馆后端代理连接 ComfyUI。';
+    const hostGroup = getSettingsElement('comfy-host-group');
+    const runpodRow = getSettingsElement('comfy-runpod-row');
+    const statusText = isRunPod
+        ? 'RunPod Serverless 模式'
+        : isDirect
+            ? '当前使用浏览器直连 ComfyUI。'
+            : '当前使用酒馆后端代理连接 ComfyUI。';
     authRow?.classList.toggle('hidden', !isDirect);
+    if (hostGroup) hostGroup.classList.toggle('hidden', isRunPod);
+    if (runpodRow) runpodRow.classList.toggle('hidden', !isRunPod);
     if (connectionHint) {
-        connectionHint.textContent = isDirect
-            ? '浏览器直连会从当前浏览器访问 ComfyUI；需要登录时可在这里填写认证信息。'
-            : '酒馆代理会通过 SillyTavern 转发请求；这里不填写 ComfyUI 认证信息。';
+        connectionHint.textContent = isRunPod
+            ? 'API Key 需在酒馆「API 连接」→「图片生成」→ ComfyUI RunPod 中配置。'
+            : isDirect
+                ? '浏览器直连会从当前浏览器访问 ComfyUI；需要登录时可在这里填写认证信息。'
+                : '酒馆代理会通过 SillyTavern 转发请求；这里不填写 ComfyUI 认证信息。';
     }
     if (connectionModeNote) {
-        connectionModeNote.textContent = isDirect
-            ? '如果直连偶发连接失败，可以先换酒馆代理对照。'
-            : '如果代理偶发拿不到图，可以先检查 ComfyUI 输出目录，或换浏览器直连对照。';
+        connectionModeNote.textContent = isRunPod
+            ? 'RunPod 模式下模型/采样器已内置于 Worker，无需配置。'
+            : isDirect
+                ? '如果直连偶发连接失败，可以先换酒馆代理对照。'
+                : '如果代理偶发拿不到图，可以先检查 ComfyUI 输出目录，或换浏览器直连对照。';
     }
     if (hostHint) {
         hostHint.textContent = isDirect
@@ -2441,6 +2515,10 @@ function refreshBuiltinWorkflowPanel(settings = getSettings()) {
 
 // 刷新 ComfyUI 模型和采样器列表
 async function refreshComfyOptions({ notify = true, timeoutMs = getSettings().timeout || 120000 } = {}) {
+    if (isRunPodConnection()) {
+        if (notify) updateComfyOptionStatus('success', 'RunPod 模式下模型已内置于 Worker，无需拉取');
+        return true;
+    }
     if (notify) updateStatusText('comfy-draw-workflow-status', '', '正在获取模型列表...');
     try {
         const models = await fetchComfyModels({ timeoutMs });
@@ -3585,7 +3663,13 @@ function abortPendingRequest() {
 
 async function testConnection() {
     const settings = getSettings();
-    if (!settings.host) {
+    const isRunPod = isRunPodConnection(settings);
+    if (isRunPod) {
+        if (!String(settings.runpodEndpoint || '').trim()) {
+            toastr.warning('请先填写 RunPod Serverless 端点地址');
+            return false;
+        }
+    } else if (!settings.host) {
         toastr.warning('请先填写 ComfyUI 地址');
         return false;
     }
@@ -3593,19 +3677,20 @@ async function testConnection() {
     abortPendingRequest();
     pendingController = new AbortController();
 
+    const label = isRunPod ? 'RunPod' : 'ComfyUI';
     try {
         await requestComfyTransport('ping', {}, {
             signal: pendingController.signal,
             timeoutMs: settings.timeout || 120000,
         });
-        toastr.success('ComfyUI 连接成功');
+        toastr.success(`${label} 连接成功`);
         updateStatusText('comfy-draw-api-status', 'success', '连接成功');
         return true;
     } catch (error) {
-        const message = error?.name === 'AbortError' || error?.message === '生成超时'
+        const message = error?.name === 'AbortError' || error?.message?.includes('超时')
             ? '连接超时，请检查地址是否可访问'
-            : (error?.message || '无法连接 ComfyUI');
-        toastr.error(message, 'ComfyUI 连接失败');
+            : (error?.message || `无法连接 ${label}`);
+        toastr.error(message, `${label} 连接失败`);
         return false;
     } finally {
         pendingController = null;
@@ -3626,7 +3711,26 @@ function stripBreakLiteral(text) {
     return String(text).replace(/\bBREAK\b/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-function buildComfyPositive({ prefix, scene, characterPrompts, chars, background, useBreak = false }) {
+function positionToRegion(position, index, total) {
+    const pos = (position || '').toLowerCase().replace(/^in\s+/, '').trim();
+    if (total === 2) {
+        if (pos.includes('right')) return '0.5 1, 0 1';
+        if (pos.includes('left')) return '0 0.5, 0 1';
+        return index === 0 ? '0 0.5, 0 1' : '0.5 1, 0 1';
+    }
+    if (total === 3) {
+        if (pos.includes('left')) return '0 0.33, 0 1';
+        if (pos.includes('center') || pos.includes('middle')) return '0.33 0.67, 0 1';
+        if (pos.includes('right')) return '0.67 1, 0 1';
+        const thirds = ['0 0.33, 0 1', '0.33 0.67, 0 1', '0.67 1, 0 1'];
+        return thirds[index] || thirds[thirds.length - 1];
+    }
+    const w = +(1 / total).toFixed(2);
+    const x = +(index * w).toFixed(2);
+    return `${x} ${+(x + w).toFixed(2)}, 0 1`;
+}
+
+function buildComfyPositive({ prefix, scene, characterPrompts, chars, background, useBreak = false, useCouple = false }) {
     const safeBackground = stripBreakLiteral(background);
     const cleanedPrompts = (Array.isArray(characterPrompts) ? characterPrompts : []).map(cp => ({
         ...cp,
@@ -3638,6 +3742,22 @@ function buildComfyPositive({ prefix, scene, characterPrompts, chars, background
         const base = joinTags(prefix, scene);
         if (!safeBackground) return base;
         return useBreak ? `${base} BREAK ${safeBackground}` : joinTags(base, safeBackground);
+    }
+
+    const activePrompts = cleanedPrompts
+        .map((cp, i) => ({ ...cp, origIndex: i }))
+        .filter(cp => cp.prompt);
+
+    if (useCouple && activePrompts.length >= 2) {
+        const global = joinTags(prefix, scene, safeBackground);
+        const parts = [`${global} FILL()`];
+        for (let i = 0; i < activePrompts.length; i++) {
+            const cp = activePrompts[i];
+            const pos = cp.position || chars?.[cp.origIndex]?.position || '';
+            const region = positionToRegion(pos, i, activePrompts.length);
+            parts.push(`COUPLE(${region}) ${cp.prompt}`);
+        }
+        return parts.join('\n');
     }
 
     if (!useBreak) {
@@ -4078,6 +4198,7 @@ function buildPromptForTask(task, sharedDrawSettings, comfySettings, promptOverr
     }
 
     const useBreak = comfySettings.useBreak === true;
+    const useCouple = comfySettings.useCouple === true;
     const charNegative = characterPrompts.map(item => item.uc).filter(Boolean).join(', ');
     return {
         positive: buildComfyPositive({
@@ -4087,6 +4208,7 @@ function buildPromptForTask(task, sharedDrawSettings, comfySettings, promptOverr
             chars: task.chars,
             background: task.background,
             useBreak,
+            useCouple,
         }),
         negative: joinTags(comfySettings.negativePrefix, negativePromptOverride, charNegative),
         characterPrompts,
@@ -4169,6 +4291,7 @@ async function getPreviewByImageId(container) {
 function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings()), background = '') {
     const settings = getSettings();
     const useBreak = settings.useBreak === true;
+    const useCouple = settings.useCouple === true;
     const charNegative = (Array.isArray(characterPrompts) ? characterPrompts : [])
         .map(item => item?.uc)
         .filter(Boolean)
@@ -4180,6 +4303,7 @@ function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEff
             characterPrompts: Array.isArray(characterPrompts) ? characterPrompts : [],
             background,
             useBreak,
+            useCouple,
         }),
         negative: joinTags(params.negativePrefix || '', charNegative),
     };
@@ -4634,12 +4758,14 @@ async function retryFailedImage(container) {
         const failedPreviews = await getPreviewsBySlot(slotId);
         latestFailed = failedPreviews.find(p => p.status === 'failed') || null;
         const useBreak = settings.useBreak === true;
+        const useCouple = settings.useCouple === true;
         const positive = buildComfyPositive({
             prefix: params.positivePrefix || '',
             scene: tags,
             characterPrompts: latestFailed?.characterPrompts || [],
             background: latestFailed?.background || '',
             useBreak,
+            useCouple,
         });
         const negative = latestFailed?.negativePrompt || params.negativePrefix || '';
 
@@ -4834,6 +4960,7 @@ export async function generateAndInsertImages({
                 positivePrefix: params.positivePrefix,
                 negativePrefix: params.negativePrefix,
                 useBreak: comfySettings.useBreak === true,
+                useCouple: comfySettings.useCouple === true,
             }, promptOverride, negativePromptOverride);
             let position = findAnchorPosition(message.mes, task.anchor);
 
