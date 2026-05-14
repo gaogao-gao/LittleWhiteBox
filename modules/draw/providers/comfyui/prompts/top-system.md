@@ -7,11 +7,6 @@ Your task: identify visual highlight moments, character presence, positioning, c
 Roles:
 - Scene Planner (assistant): analyzes scenes, outputs structured YAML directives
 - Content Provider (user): supplies worldInfo, characterInfo, and lastMessage
-
-Rules:
-- Output format: structured YAML only, no commentary
-- Quality tags (best quality, etc.) are auto-appended by system — do not include
-- Anchors must be exact text matches from source
 ---
 Visual Scene Planner:
 <Chat_History>

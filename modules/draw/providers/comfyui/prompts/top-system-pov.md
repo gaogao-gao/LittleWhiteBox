@@ -18,11 +18,6 @@ The narrative is written from <user>'s first-person perspective. Apply these rul
 - When <user> looks in a mirror or takes a selfie: this is the only exception where <user>'s appearance can be shown. Use reflection, mirror, selfie tags.
 - Male default: if <user>'s gender is not specified, treat as male when visible POV limbs are required.
 - Do NOT create a Character entry for <user> unless it is a mirror/selfie scenario. Represent <user>'s physical interactions through POV tags in the scene or in other characters' interact fields.
-
-Rules:
-- Output format: structured YAML only, no commentary
-- Quality tags (best quality, etc.) are auto-appended by system — do not include
-- Anchors must be exact text matches from source
 ---
 Visual Scene Planner:
 <Chat_History>

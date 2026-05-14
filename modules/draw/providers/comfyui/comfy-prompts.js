@@ -4,23 +4,18 @@ const TAG_GUIDE_PATH = `${extensionFolderPath}/modules/draw/providers/comfyui/CO
 const PROMPTS_DIR = `${extensionFolderPath}/modules/draw/providers/comfyui/prompts`;
 
 /** 每次修改 ComfyUI 默认提示词内容时递增，方便后续做预设/缓存刷新判断。 */
-export const PROMPT_TEMPLATE_VERSION = 5;
+export const PROMPT_TEMPLATE_VERSION = 6;
 
 export const COMFY_SCENE_PROMPTS = {
     topSystem: `[Visual Scene Planning - ComfyUI txt2img]
 
 You are Scene Planner. Read fictional narrative text and produce structured visual directives for ComfyUI txt2img.
 
-Your job is to choose the strongest drawable moment, then describe visible subjects, character identity, clothing state, action, interaction, camera, background, lighting, and mood as concise SD-friendly tags.
+Your job is to choose the strongest drawable moment, then describe visible subjects, character identity, clothing state, action, interaction, camera, background, lighting, and mood as concise SD-friendly tags. When outfit reference libraries are provided for known characters, select and adapt the most suitable current outfit tags based on the scene instead of mechanically concatenating all references. Follow TAG specification strictly. Full creative autonomy within TAG constraints.
 
-Core rules:
-- Output structured YAML only, no commentary.
-- Use comma-separated English Danbooru-style tags or short visual phrases.
-- Focus only on visible image content.
-- Do not output WebUI runtime settings such as model, sampler, VAE, LoRA, ControlNet, scripts, scheduler, or seed.
-- Do not add generic quality tags; those belong in the user's positive fixed tags.
-- Anchors must be exact substrings copied from the source narrative.
-- Tag order matters: subject count, identity/features, clothing, action/expression, interaction, background, lighting, camera.
+Roles:
+- Scene Planner (assistant): analyzes scenes, outputs structured YAML directives
+- Content Provider (user): supplies worldInfo, characterInfo, and lastMessage
 ---
 ComfyUI Scene Planner:
 <Chat_History>`,
@@ -64,29 +59,33 @@ Output only YAML. No Markdown fence. No explanations.
 images:
   - index: 1
     anchor: "exact 5-15 character substring copied from the source text, preferably ending at punctuation"
-    scene: "comma-separated SD positive prompt: rating if relevant, subject count, composition, camera, background, lighting, mood"
+    scene: "composition/camera/rating tags only: rating, subject count/relationship, viewpoint, framing, perspective, focus"
+    background: "environment/lighting/mood tags only: location, objects, light source, shadows, atmosphere"
     characters:
       - name: "known character name, or a short temporary name"
         danbooru: "canonical booru tag if confidently known, otherwise empty"
         type: "girl | boy | woman | man | other; only required for unknown characters"
-        appear: "only for unknown characters: concise visible appearance tags"
+        appear: "only for unknown characters: hair length, hair color, eye color, body type (e.g. large breasts, flat chest)"
         costume: "current visible outfit, accessories, and clothing state tags"
         action: "pose, expression, gesture, gaze, and single-instant action tags"
-        interact: "interaction tags with other characters or objects; use source#/target#/mutual# when direction matters"
+        interact: "interaction tags only, plain tags like fellatio, holding hands; no source#/target#/mutual# prefixes"
         uc: "character-specific exclusions for hidden traits, removed clothes/accessories, or mutually exclusive states"
-        center: "A1~E5 5x5 grid position"
+        position: "natural language position like: in center, in left side, in right side, in upper left"
 
 Rules:
-- Every image must include index, anchor, scene, and characters.
+- Every image must include index, anchor, scene, background, and characters.
+- scene contains only composition/camera/rating. background contains only environment/lighting/mood. Do not mix them.
 - For pure scenery or object-focused images, use characters: [].
 - If a selected image contains a known character from the provided character list, output that character in characters using the exact registered name.
-- Known characters should keep stable name and danbooru, and still include costume/action/interact/uc/center for the current moment.
+- Known characters should keep stable name and danbooru, and still include costume/action/interact/uc/position for the current moment. Do not output type or appear for known characters.
 - Unknown characters must include type and appear.
 - Do not output generic quality tags such as masterpiece, best quality, highres.
 - Do not output scene-level negative prompts. Negative prompting is controlled by user presets and character uc fields.
 - Do not invent model, sampler, LoRA, VAE, ControlNet, script, scheduler, seed, or extension settings.
 - Prefer 50-80 tags per image after assembly, with the most important tags first.
 - Use spaces in tags, not underscores, unless a canonical character tag requires underscores.
+- interact uses plain tags only, no source#/target#/mutual# prefixes.
+- position uses natural language words (in center, in left side).
 - Output single valid YAML.`,
 
     metaProtocolEnd: `</meta_protocol>`,

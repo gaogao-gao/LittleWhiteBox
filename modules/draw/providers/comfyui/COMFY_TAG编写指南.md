@@ -2,48 +2,50 @@
 
 ## 核心原则
 
-ComfyUI 使用与 SD WebUI 相同的 **Danbooru 风格 tags** 和短英文视觉短语。只描述画面里能看见的内容。
+使用 **Danbooru 风格 tags** 和短英文视觉短语。只描述画面里能看见的内容。
 
 - 所有特征优先写成英文 Danbooru tags：外貌、服装、动作、表情、场景、光影
 - Tag 之间用英文逗号 `,` 分隔，tag 内部用空格（如 `long hair` 而非 `long_hair`）
-- 不输出模型、采样器、VAE、LoRA、ControlNet、节点配置、seed 等参数
-- 不输出通用质量词：`masterpiece`, `best quality`, `highres` 等由用户在「正向固定」配置
-- 不输出整图 negative 字段；只允许在角色 `uc` 中写当前角色专属排除项，通用负向由用户在「负向固定」配置
+- 每个字段内，按重要性降序排列 tag
 
 ---
 
 ## 权重语法
 
-ComfyUI 支持多种权重语法，取决于所用节点：
-
-**CLIP Text Encode 常用语法：**
 ```text
 (tag)        → 轻微强调 (~1.1x)
 (tag:1.2)    → 明确强调
 (tag:0.8)    → 降低权重
 ```
 
-**部分自定义节点支持：**
-```text
-tag++        → 强调
-tag--        → 降低
-```
-
 权重只用于核心主体、关键动作、关键表情或关键服装状态。
 
 ---
 
-## Tag 顺序
+## scene 字段 Tag 参考
 
-靠前的 tag 权重更高。按视觉重要性排序：
+构图/相机/分级相关 tag：
 
 ```text
-主体数量 → 身份/外貌 → 服装状态 → 动作/表情 → 互动 → 背景 → 光影 → 镜头
+分级 → 人数计数 → 性关系 → 视角 → 区域 → 远近 → 透视 → 焦点
 ```
 
 示例：
 ```text
-1girl, solo, long hair, black hair, red eyes, white dress, sitting, looking down, bedroom, bed, moonlight, soft lighting, upper body
+nsfw, 1boy 1girl, hetero, pov, from above, upper body, close-up, face focus, blurry background
+```
+
+## background 字段 Tag 参考
+
+环境/光影/氛围相关 tag：
+
+```text
+室内外 → 地点 → 具体物件 → 光源 → 光影效果 → 氛围
+```
+
+示例：
+```text
+indoors, living room, wooden floor, window, curtains, night, warm lighting, sidelighting, dramatic shadows
 ```
 
 ---
@@ -69,27 +71,14 @@ tag--        → 降低
 
 ---
 
-## 场景字段规则
-
-`scene` 负责整张图的基础构图，不要重复角色细节。
-
-**必须包含：**
-- 分级与人数: `sfw`, `nsfw`, `solo`, `duo`, `1girl`, `1boy`, `1girl 1boy`, `2girls`
-- 构图: `portrait`, `upper body`, `cowboy shot`, `full body`, `close-up`, `wide shot`
-- 视角: `from front`, `from side`, `from behind`, `from above`, `from below`, `pov`
-- 环境: 不要只写 `indoors`，要补具体地点和物件，如 `bedroom, bed, window, curtains`
-- 光影: `sunlight`, `moonlight`, `warm lighting`, `dim lighting`, `backlighting`, `rim light`
-
----
-
 ## 角色字段规则
 
 **已录入角色（已知角色）：**
 - 不要输出 `type` 和 `appear`（系统自动注入）
-- 必须输出: `costume`, `action`, `interact`, `uc`, `center`
+- 必须输出: `costume`, `action`, `interact`, `uc`, `position`
 
 **未知角色：**
-- 必须输出所有字段: `type`, `appear`, `costume`, `action`, `interact`, `uc`, `center`
+- 必须输出所有字段: `type`, `appear`, `costume`, `action`, `interact`, `uc`, `position`
 
 ---
 
@@ -109,8 +98,9 @@ tag--        → 降低
 
 **互动（多角色时）：**
 - `holding hands`, `hug`, `kiss`, `face to face`, `hand on shoulder`
-- 方向不清时用前缀: `source#动作`, `target#动作`, `mutual#动作`
-- 在 ComfyUI 中，`interact` 仍然会作为角色 prompt 的普通 tags 并入最终正向提示词，不是 NovelAI 专属能力
+- interact 使用纯标签格式，不加方向前缀
+- 正确: `fellatio`, `holding hands`
+- 错误: `source#fellatio`, `target#fellatio`
 
 ---
 
@@ -134,7 +124,7 @@ tag--        → 降低
 
 ## 角色 uc 字段
 
-`uc` 是角色级排除项，会并入最终负向提示词；只写当前角色专属排除，不写整图 negative 或通用质量负面。
+`uc` 是角色级排除项，只写当前角色专属排除：
 
 **适合写入：**
 - 当前角色摘掉了眼镜: `glasses`
@@ -143,7 +133,22 @@ tag--        → 降低
 - 衣服已脱下或破损: 排除仍完整穿着的互斥服饰
 
 **不适合写入：**
-- `bad anatomy`, `bad hands`, `worst quality`, `lowres`（这些由用户负向固定配置）
+- `bad anatomy`, `bad hands`, `worst quality`, `lowres`（通用负向由系统配置）
+
+---
+
+## 自然语言位置词 (position)
+
+使用简短自然语言描述角色在画面中的位置：
+
+- 中心（默认）: `in center`
+- 偏左: `in left side`
+- 偏右: `in right side`
+- 上方: `in upper area`
+- 下方: `in lower area`
+- 组合: `in upper left`, `in lower right`
+
+单人默认 `in center`，仅在偏离中心时填写。
 
 ---
 
@@ -153,11 +158,3 @@ tag--        → 降低
 - 背面视角不要强调正面表情（除非回头）
 - `upper body` 不要描述脚、膝盖等看不到的部位
 - 每张图只选一个最强视觉瞬间
-
----
-
-## 输出纪律
-
-- anchor 必须复制原文 5-15 个字，最好到标点结束
-- tags 用空格不用下划线（除非是角色 canonical tag 如 `hatsune_miku`）
-- 总量保持紧凑：整张图组装后约 50-80 个 tag
